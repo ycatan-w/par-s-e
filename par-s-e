@@ -1,0 +1,345 @@
+#!/usr/bin/env bash
+
+# =========================
+# par-s-e : lightweight script manager
+# =========================
+
+# --- Colors ---
+RED="\033[0;31m"
+RED_FLASH="\033[5;31m"
+BACKGROUND_RED="\033[0;41;97m"
+GREEN="\033[0;32m"
+GREEN_FLASH="\033[5;32m"
+YELLOW="\033[0;33m"
+YELLOW_FLASH="\033[5;33m"
+YELLOW_BOLD="\033[1;33m"
+BRIGHT_MAGENTA_BOLD="\033[1;95m"
+BRIGHT_YELLOW="\033[2;93m"
+BRIGHT_YELLOW_FLASH="\033[5;2;93m"
+CYAN="\033[0;36m"
+NC="\033[0m"
+
+# --- Repo directory ---
+SCRIPTS_DIR=$(echo "$(dirname "$(readlink -f "$0")")/scripts")
+
+# --- Bin & Db dir ---
+BIN_DIR="${HOME}/.par-s-e/bin"
+DB_FILE="${HOME}/.par-s-e/installed.db"
+mkdir -p "$BIN_DIR"
+touch "$DB_FILE"
+
+# --- Utility functions ---
+
+error() { echo -e "${RED}✖ $*${NC}" >&2; exit 1; }
+overwrite() { echo -e "\r\033[1A\033[0K$@"; }
+error_block() {
+    local msg="$1"
+    local padding=2
+    local text_len=${#msg}
+    local total_len=$((text_len + padding * 2))
+    local line=$(printf "%${total_len}s" " " | tr ' ' ' ')
+
+    echo -e "${BACKGROUND_RED}${line}${NC}"
+    printf "${BACKGROUND_RED}%${padding}s%s${NC}${BACKGROUND_RED}%${padding}s${NC}\n" "" "$msg" ""
+    echo -e "${BACKGROUND_RED}${line}${NC}"
+}
+
+strip_extension() {
+    local filename="$1"
+    echo "$filename" | sed -E 's/\.(sh|py|pl|rb|js|ts|php|lua|go|rs)$//'
+}
+
+# --------------------------
+# HELP SYSTEM
+# --------------------------
+show_help() {
+    echo -e "${YELLOW}par-s-e${NC} - lightweight script manager"
+    echo
+    echo -e "${YELLOW}Usage:${NC}"
+    echo "  command [options] [arguments]"
+    echo
+    echo -e "${YELLOW}Options:${NC}"
+    echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "-h, --help"  "Display help for the given command. When no command is given display help for the ${GREEN}list${NC} command")"
+    echo
+    echo -e "${YELLOW}Available commands:${NC}"
+    echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "list"        "List commands")"
+    echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "catalog"     "List available/installed scripts")"
+    echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "install"     "Install a script (with optional alias)")"
+    echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "update"      "Update all or a single installed script")"
+    echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "uninstall"   "Remove an installed script")"
+    echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "help"        "Show this help")"
+    echo
+    echo -e "Run '${YELLOW}par-s-e help <command>${NC}' for more info on a command."
+}
+show_help_command_description() {
+    echo -e "${YELLOW}Description:${NC}"
+    echo "  $1"
+}
+show_help_command_usage() {
+    echo -e "${YELLOW}Usage:${NC}"
+    echo "  $1"
+}
+show_help_command_option() {
+    echo -e "${YELLOW}Option:${NC}"
+    echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "-h, --help"  "Display help for the given command. When no command is given display help for the ${GREEN}help${NC} command")"
+}
+show_help_command() {
+    case "$1" in
+        install)
+            show_help_command_description "Install a script from repo/scripts into ~/.par-s-e/bins"
+            echo
+            show_help_command_usage "install [option] <script> [<alias>]"
+            echo
+            echo -e "${YELLOW}Arguments:${NC}"
+            echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "script"  "The name of the script to install from the repository")"
+            echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "alias"   "Optional: the name to use for the installed command (default: same as script)")"
+            echo
+            show_help_command_option
+            ;;
+        update)
+            show_help_command_description "Update a single script if alias given, otherwise update all installed"
+            echo
+            show_help_command_usage "update [<name>]"
+            echo
+            echo -e "${YELLOW}Arguments:${NC}"
+            echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "name"   "The installed script to update (can be either the script name or its alias)")"
+            echo
+            show_help_command_option
+            ;;
+        uninstall)
+            show_help_command_description "Remove a previously installed script"
+            echo
+            show_help_command_usage "uninstall [option] <name>"
+            echo
+            echo -e "${YELLOW}Arguments:${NC}"
+            echo -e "$(printf "  ${GREEN}%-12s${NC} %s\n" "name"   "The installed script to remove (can be either the script name or its alias)")"
+            echo
+            show_help_command_option
+            ;;
+        catalog)
+            show_help_command_description "Show all available/installed scripts"
+            echo
+            show_help_command_usage "catalog [option]"
+            echo
+            show_help_command_option
+            ;;
+        list)
+            show_help_command_description "List commands"
+            echo
+            show_help_command_usage "list [option]"
+            echo
+            show_help_command_option
+            ;;
+        *)
+            show_help
+            ;;
+    esac
+}
+
+# --------------------------
+# COMMANDS
+# --------------------------
+install_script() {
+    local source="$1"
+    local alias="$2"
+
+    if [ -z "$source" ]; then
+        echo
+        error_block "Not enough arguments (missing: "script")"
+        echo
+        show_help_command "install"
+        exit 1
+    fi
+
+    echo -e "${BRIGHT_MAGENTA_BOLD}══════════════════ Scripts ══════════════════${NC}"
+    echo
+
+    if [ ! -f "$SCRIPTS_DIR/$source" ]; then
+        echo -e "${RED}✖${NC} Script '$source' not found in repo."
+        return 1
+    fi
+
+    if [ -z "$alias" ]; then
+        alias=$(basename "$source")
+        alias=$(strip_extension "$alias")
+    fi
+    echo -e "${GREEN_FLASH}●${NC} $source   ${YELLOW_FLASH}↳${NC} ${BRIGHT_YELLOW_FLASH}$alias${NC}"
+    sleep 3
+    cp "$SCRIPTS_DIR/$source" "$BIN_DIR/$alias"
+    chmod +x "$BIN_DIR/$alias"
+
+    grep -v -E "^${alias}[[:space:]]" "$DB_FILE" > "${DB_FILE}.tmp" || true
+    mv "${DB_FILE}.tmp" "$DB_FILE"
+    echo -e "${alias}\t${source}" >> "$DB_FILE"
+
+    overwrite "\r${GREEN}●${NC} $source   ${YELLOW_BOLD}↳${NC} ${BRIGHT_YELLOW}$alias${NC}"
+}
+
+update_one() {
+    local alias="$1"
+    local source
+    source=$(grep -E "^${alias}[[:space:]]" "$DB_FILE" | awk '{print $2}')
+    [ -z "$source" ] && error "Alias '$alias' not found in installed DB"
+
+    echo -e "${BRIGHT_MAGENTA_BOLD}══════════════════ Scripts ══════════════════${NC}"
+    echo
+
+    if [ ! -f "$SCRIPTS_DIR/$source" ]; then
+        echo -e "${RED}✖${NC} Source script '$source' no longer exists in repo."
+        return 1
+    fi
+
+    echo -e "${YELLOW_FLASH}●${NC} $source   ${YELLOW_FLASH}↳${NC} ${BRIGHT_YELLOW_FLASH}$alias${NC}"
+    sleep 3
+    cp "$SCRIPTS_DIR/$source" "$BIN_DIR/$alias"
+    chmod +x "$BIN_DIR/$alias"
+    overwrite "\r${GREEN}●${NC} $source   ${YELLOW_BOLD}↳${NC} ${BRIGHT_YELLOW}$alias${NC}"
+}
+
+update_all() {
+    echo -e "${BRIGHT_MAGENTA_BOLD}══════════════════ Scripts ══════════════════${NC}"
+    echo
+
+    while IFS=$'\t' read -r alias source; do
+        [ -z "$alias" ] && continue
+        if [ -f "$SCRIPTS_DIR/$source" ]; then
+            echo -e "${YELLOW_FLASH}●${NC} $source   ${YELLOW_FLASH}↳${NC} ${BRIGHT_YELLOW_FLASH}$alias${NC}"
+            sleep 3
+            cp "$SCRIPTS_DIR/$source" "$BIN_DIR/$alias"
+            chmod +x "$BIN_DIR/$alias"
+            overwrite "\r${GREEN}●${NC} $source   ${YELLOW_BOLD}↳${NC} ${BRIGHT_YELLOW}$alias${NC}"
+        else
+            echo -e "${YELLOW_BOLD}‼ Source '$source' for alias '$alias' no longer exists${NC}"
+        fi
+    done < "$DB_FILE"
+}
+
+uninstall_script() {
+    local alias="$1"
+    if [ -z "$alias" ]; then
+        echo
+        error_block "Not enough arguments (missing: "name")"
+        echo
+        show_help_command "uninstall"
+        exit 1
+    fi
+    echo -e "${BRIGHT_MAGENTA_BOLD}══════════════════ Scripts ══════════════════${NC}"
+    echo
+
+    alias_file_exists=0
+    [ -f "$BIN_DIR/$alias" ] && alias_file_exists=1
+    alias_db_exists=0
+    grep -q -E "^${alias}[[:space:]]" "$DB_FILE" && alias_db_exists=1
+
+    if [ $alias_file_exists -eq 1 ] || [ $alias_db_exists -eq 1 ]; then
+        if [ $alias_db_exists -eq 1 ]; then
+            source=$(grep -E "^${alias}[[:space:]]" "$DB_FILE" | awk '{print $2}')
+        fi
+        echo -e "${RED_FLASH}●${NC} ${source:-"[source]"}   ${YELLOW_FLASH}↳${NC} ${BRIGHT_YELLOW_FLASH}$alias${NC}"
+        sleep 3
+        [ $alias_file_exists -eq 1 ] && rm "$BIN_DIR/$alias"
+        if [ $alias_db_exists -eq 1 ]; then
+            grep -v -E "^${alias}[[:space:]]" "$DB_FILE" > "${DB_FILE}.tmp"
+            mv "${DB_FILE}.tmp" "$DB_FILE"
+        fi
+        overwrite "${CYAN}○${NC} ${source:-"[source]"}   ${YELLOW_BOLD}↳${NC} ${BRIGHT_YELLOW}$alias${NC}"
+    else
+        echo -e "${YELLOW_BOLD}‼ Script '$alias' not found.${NC}"
+    fi
+}
+
+show_catalog() {
+    echo -e "${BRIGHT_MAGENTA_BOLD}══════════════════ Scripts ══════════════════${NC}"
+    echo
+    echo -e "Legend:  ${CYAN}○ available${NC}   ${GREEN}● installed${NC}   ${YELLOW_BOLD}↳ alias${NC}"
+    echo
+    installed_list=""
+    while IFS=$'\t' read -r alias source; do
+        [ -z "$alias" ] && continue
+        if echo "$installed_list" | grep -q "$source:"; then
+            installed_list=$(echo "$installed_list" | sed "s|\($source:\)\([^;]*\)|\1\2,$alias|")
+        else
+            installed_list+="$source:$alias;"
+        fi
+    done < "$DB_FILE"
+
+    for file in $(ls "$SCRIPTS_DIR"); do
+        if echo "$installed_list" | grep -q "$file:"; then
+            aliases_of_source=$(echo "$installed_list" | grep -o "$file:[^;]*" | sed "s|$file:||")
+            alias_str=""
+            IFS=',' read -r -a arr <<< "$aliases_of_source"
+            for alias in "${arr[@]}"; do
+                alias_str+="${YELLOW_BOLD}↳${NC} ${BRIGHT_YELLOW}$alias${NC}   "
+            done
+            alias_str=$(echo "$alias_str" | sed 's/[[:space:]]*$//')
+            echo -e "$(printf "  ${GREEN}●${NC} %-25s %s\n" "$file" "$alias_str")"
+        else
+            printf "  ${CYAN}○${NC} %-25s\n" "$file"
+        fi
+    done
+}
+
+# --------------------------
+# HELPER: detect --help or -h in args
+# --------------------------
+check_help() {
+    for arg in "$@"; do
+        case "$arg" in
+            --help|-h) return 0;;
+        esac
+    done
+    return 1
+}
+
+# --------------------------
+# DISPATCHER
+# --------------------------
+case "$1" in
+    install|update|uninstall|catalog)
+        cmd="$1"
+        shift
+        if check_help "$@"; then
+            show_help_command "$cmd"
+            exit 1
+        fi
+
+        case "$cmd" in
+            install) install_script "$@";;
+            update)
+                if [ -z "$1" ]; then
+                    update_all
+                else
+                    update_one "$1"
+                fi
+                ;;
+            uninstall) uninstall_script "$@";;
+            catalog) show_catalog "$@";;
+        esac
+        ;;
+    list)
+        shift
+        if check_help "$@"; then
+            show_help
+            exit 1
+        fi
+        if [ -n "$1" ]; then
+            show_help_command "$1"
+            exit 1
+        fi
+        show_help
+    ;;
+    help|"--help"|"-h"|"")
+        shift
+        if [ -n "$1" ]; then
+            show_help_command "$1"
+            exit 1
+        fi
+        show_help
+        ;;
+    *)
+        echo -e "${RED}Unknown command:${NC} $1"
+        echo
+        show_help
+        exit 1
+        ;;
+esac
