@@ -4,36 +4,38 @@ _parse_complete() {
     local cur prev repo_dir commands scripts
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
-    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    prev="${COMP_WORDS[COMP_CWORD - 1]}"
 
     # Available subcommands
     commands="list install update uninstall catalog help"
 
     # If completing the first argument (subcommand)
     if [[ $COMP_CWORD -eq 1 ]]; then
-        COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )
+        COMPREPLY=($(compgen -W "${commands}" -- "${cur}"))
         return 0
     fi
 
     case "$prev" in
-        list)
-            COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )
-            return 0
-            ;;
-        install)
-            repo_dir=$(readlink -f "$(command -v par-s-e)")
-            repo_dir=$(dirname "$repo_dir")
-            scripts=$(ls "$repo_dir/scripts" 2>/dev/null)
-            COMPREPLY=( $(compgen -W "${scripts}" -- "${cur}") )
-            return 0
-            ;;
-        update|uninstall)
-            if [[ -f "$HOME/.par-s-e/installed.db" ]]; then
-                scripts=$(cut -f1 "$HOME/.par-s-e/installed.db")
-                COMPREPLY=( $(compgen -W "${scripts}" -- "${cur}") )
-            fi
-            return 0
-            ;;
+    list)
+        COMPREPLY=($(compgen -W "${commands}" -- "${cur}"))
+        return 0
+        ;;
+    install)
+        repo_dir=$(readlink -f "$(command -v par-s-e)")
+        repo_dir=$(dirname "$repo_dir")
+        scripts=$(ls "$repo_dir/scripts" 2>/dev/null)
+        shims=$(ls "$repo_dir/shims" 2>/dev/null)
+        COMPREPLY=($(compgen -W "${scripts} ${shims}" -- "${cur}"))
+        return 0
+        ;;
+    update | uninstall)
+        if [[ -f "$HOME/.par-s-e/installed.db" ]]; then
+            scripts=$(cut -f1 "$HOME/.par-s-e/installed.db")
+            shims=$(cut -f1 "$HOME/.par-s-e/installed-shims.db")
+            COMPREPLY=($(compgen -W "${scripts} ${shims}" -- "${cur}"))
+        fi
+        return 0
+        ;;
     esac
 }
 
