@@ -1,0 +1,12 @@
+#!/bin/bash
+
+dir="$(pwd)"
+COMPOSER_BIN='/usr/local/bin/composer'
+if [ -f "$dir/bin/composer.phar" ]; then
+  COMPOSER_BIN="$dir/bin/composer.phar"
+elif [ -f "$dir/bin/composer" ]; then
+  COMPOSER_BIN="$dir/bin/composer"
+fi
+echo -e "> \033[38;5;201mCOMPOSER_ROOT_VERSION=dev-develop COMPOSER_MEMORY_LIMIT=-1 $COMPOSER_BIN $@\033[0m"
+
+COMPOSER_ROOT_VERSION=dev-develop COMPOSER_MEMORY_LIMIT=-1 "$COMPOSER_BIN" "$@"
